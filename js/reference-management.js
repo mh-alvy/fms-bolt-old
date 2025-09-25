@@ -165,6 +165,8 @@ class ReferenceManagementManager {
 
                 </div>
             </div>
+        }
+    }
     async addReceivedBy() {
     }
 
@@ -180,6 +182,8 @@ class ReferenceManagementManager {
             await this.refresh();
         } catch (error) {
             Utils.showToast(error.message || 'Error adding receiver option', 'error');
+        }
+    }
     updateReceivedByDropdowns() {
     }
 

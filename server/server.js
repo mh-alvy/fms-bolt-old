@@ -67,7 +67,7 @@ app.use('/api/activities', require('./routes/activities'));
 app.use('/api/references', require('./routes/references'));
 
 // Serve static files
-app.get('*', (req, res) => {
+app.get('/*', (req, res) => {
   res.sendFile(path.join(__dirname, '../index.html'));
 });
 

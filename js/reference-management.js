@@ -84,8 +84,7 @@ class ReferenceManagementManager {
 
     getReferences() {
         try {
-            // This will be loaded from API
-            return this.references || ["Cash Payment", "Bank Transfer", "Mobile Banking", "Check Payment"];
+            return JSON.parse(localStorage.getItem('btf_reference_options') || '["Cash Payment", "Bank Transfer", "Mobile Banking", "Check Payment"]');
         } catch (e) {
             return ["Cash Payment", "Bank Transfer", "Mobile Banking", "Check Payment"];
         }
@@ -93,41 +92,28 @@ class ReferenceManagementManager {
 
     getReceivedByOptions() {
         try {
-            // This will be loaded from API
-            return this.receivedByOptions || ["Reception Desk", "Admin Office", "Accounts Department"];
+            return JSON.parse(localStorage.getItem('btf_received_by_options') || '["Reception Desk", "Admin Office", "Accounts Department"]');
         } catch (e) {
             return ["Reception Desk", "Admin Office", "Accounts Department"];
         }
     }
 
-    async loadReferences() {
-        try {
-            this.references = await window.apiService.getReferences();
-        } catch (error) {
-            console.error('Error loading references:', error);
-            this.references = ["Cash Payment", "Bank Transfer", "Mobile Banking", "Check Payment"];
-        }
+    saveReferences(references) {
+        localStorage.setItem('btf_reference_options', JSON.stringify(references));
     }
 
-    async loadReceivedByOptions() {
-        try {
-            this.receivedByOptions = await window.apiService.getReceivedByOptions();
-        } catch (error) {
-            console.error('Error loading received by options:', error);
-            this.receivedByOptions = ["Reception Desk", "Admin Office", "Accounts Department"];
-        }
+    saveReceivedByOptions(options) {
+        localStorage.setItem('btf_received_by_options', JSON.stringify(options));
     }
 
-    async refresh() {
-        await this.loadReferences();
-        await this.loadReceivedByOptions();
+    refresh() {
         this.loadReferenceOptions();
         this.loadReceivedByOptions();
         this.updateReferenceDropdowns();
         this.updateReceivedByDropdowns();
     }
 
-    async addReference() {
+    loadReferenceOptions() {
         const referenceList = document.getElementById('referenceOptionsList');
         if (!referenceList) return;
 
@@ -155,19 +141,24 @@ class ReferenceManagementManager {
         const receivedByList = document.getElementById('receivedByOptionsList');
         if (!receivedByList) return;
 
-        try {
-            await window.apiService.addReference(referenceText);
-            Utils.showToast('Reference option added successfully', 'success');
-            document.getElementById('addReferenceForm').reset();
-            await this.refresh();
-        } catch (error) {
-            Utils.showToast(error.message || 'Error adding reference option', 'error');
+        const options = this.getReceivedByOptions();
+        
+        if (options.length === 0) {
+            receivedByList.innerHTML = '<p class="text-center">No receiver options created yet</p>';
+            return;
+        }
 
+        receivedByList.innerHTML = options.map((option, index) => `
+            <div class="entity-item">
+                <div class="entity-info">
+                    <div class="entity-name">${option}</div>
+                </div>
+                <div class="entity-actions">
+                    <button class="btn btn-small btn-outline" onclick="referenceManagementManager.editReceivedBy(${index})">Edit</button>
+                    <button class="btn btn-small btn-danger" onclick="referenceManagementManager.deleteReceivedBy(${index})">Delete</button>
                 </div>
             </div>
-        }
-    }
-    async addReceivedBy() {
+        `).join('');
     }
 
     updateReferenceDropdowns() {
@@ -175,81 +166,86 @@ class ReferenceManagementManager {
         if (!referenceSelect) return;
 
         const references = this.getReferences();
-        try {
-            await window.apiService.addReceivedBy(receivedByText);
-            Utils.showToast('Receiver option added successfully', 'success');
-            document.getElementById('addReceivedByForm').reset();
-            await this.refresh();
-        } catch (error) {
-            Utils.showToast(error.message || 'Error adding receiver option', 'error');
-        }
-    }
-    updateReceivedByDropdowns() {
+        
+        referenceSelect.innerHTML = '<option value="">Select Reference</option>' +
+            references.map(ref => `<option value="${ref}">${ref}</option>`).join('') +
+            '<option value="custom">Custom</option>';
     }
 
-    async editReference(index) {
+    updateReceivedByDropdowns() {
+        const receivedBySelect = document.getElementById('receivedBySelect');
+        if (!receivedBySelect) return;
+
+        const options = this.getReceivedByOptions();
+        
+        receivedBySelect.innerHTML = '<option value="">Select Receiver</option>' +
+            options.map(option => `<option value="${option}">${option}</option>`).join('') +
+            '<option value="custom">Custom</option>';
+    }
+
+    editReference(index) {
         const references = this.getReferences();
         const currentReference = references[index];
         
         const newReference = prompt('Edit reference option:', currentReference);
         if (newReference && newReference !== currentReference) {
-            try {
-                // Delete old and add new (since we don't have update endpoint)
-                await window.apiService.deleteReference(index);
-                await window.apiService.addReference(Utils.sanitizeInput(newReference));
-                Utils.showToast('Reference option updated successfully', 'success');
-                await this.refresh();
-            } catch (error) {
-                Utils.showToast(error.message || 'Error updating reference option', 'error');
+            const sanitizedReference = Utils.sanitizeInput(newReference);
+            
+            // Check if new reference already exists
+            if (references.includes(sanitizedReference)) {
+                Utils.showToast('Reference option already exists', 'error');
+                return;
             }
+
+            references[index] = sanitizedReference;
+            this.saveReferences(references);
+            Utils.showToast('Reference option updated successfully', 'success');
+            this.refresh();
         }
     }
 
-    async editReceivedBy(index) {
+    editReceivedBy(index) {
         const options = this.getReceivedByOptions();
         const currentOption = options[index];
         
         const newOption = prompt('Edit receiver option:', currentOption);
         if (newOption && newOption !== currentOption) {
-            try {
-                // Delete old and add new (since we don't have update endpoint)
-                await window.apiService.deleteReceivedBy(index);
-                await window.apiService.addReceivedBy(Utils.sanitizeInput(newOption));
-                Utils.showToast('Receiver option updated successfully', 'success');
-                await this.refresh();
-            } catch (error) {
-                Utils.showToast(error.message || 'Error updating receiver option', 'error');
+            const sanitizedOption = Utils.sanitizeInput(newOption);
+            
+            // Check if new option already exists
+            if (options.includes(sanitizedOption)) {
+                Utils.showToast('Receiver option already exists', 'error');
+                return;
             }
+
+            options[index] = sanitizedOption;
+            this.saveReceivedByOptions(options);
+            Utils.showToast('Receiver option updated successfully', 'success');
+            this.refresh();
         }
     }
 
-    async deleteReference(index) {
+    deleteReference(index) {
         const references = this.getReferences();
         const referenceToDelete = references[index];
         
-        Utils.confirm(`Are you sure you want to delete "${referenceToDelete}"?`, async () => {
-            try {
-                await window.apiService.deleteReference(index);
-                Utils.showToast('Reference option deleted successfully', 'success');
-                await this.refresh();
-            } catch (error) {
-                Utils.showToast(error.message || 'Error deleting reference option', 'error');
-            }
+        Utils.confirm(`Are you sure you want to delete "${referenceToDelete}"?`, () => {
+            references.splice(index, 1);
+            this.saveReferences(references);
+            Utils.showToast('Reference option deleted successfully', 'success');
+            this.refresh();
         });
     }
 
-    async deleteReceivedBy(index) {
+    deleteReceivedBy(index) {
         const options = this.getReceivedByOptions();
         const optionToDelete = options[index];
         
-        Utils.confirm(`Are you sure you want to delete "${optionToDelete}"?`, async () => {
-            try {
-                await window.apiService.deleteReceivedBy(index);
-                Utils.showToast('Receiver option deleted successfully', 'success');
-                await this.refresh();
-            } catch (error) {
-                Utils.showToast(error.message || 'Error deleting receiver option', 'error');
-            }
+        Utils.confirm(`Are you sure you want to delete "${optionToDelete}"?`, () => {
+            options.splice(index, 1);
+            this.saveReceivedByOptions(options);
+            Utils.showToast('Receiver option deleted successfully', 'success');
+            this.refresh();
         });
     }
 }

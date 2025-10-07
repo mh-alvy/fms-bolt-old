@@ -1,414 +1,770 @@
-// Data Storage Manager
 class StorageManager {
     constructor() {
+        this.supabase = null;
         this.init();
     }
 
-    init() {
-        this.ensureDataStructure();
+    async init() {
+        await this.waitForSupabase();
     }
 
-    ensureDataStructure() {
-        // Initialize empty arrays if they don't exist
-        const collections = ['batches', 'courses', 'months', 'institutions', 'students', 'payments', 'activities'];
-        
-        collections.forEach(collection => {
-            const key = `btf_${collection}`;
-            if (!localStorage.getItem(key)) {
-                localStorage.setItem(key, JSON.stringify([]));
-            }
-        });
-    }
+    async waitForSupabase() {
+        let attempts = 0;
+        while (!window.supabase && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
 
-    generateId(prefix = 'item') {
-        return `${prefix}_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+        if (!window.supabase) {
+            throw new Error('Supabase client not initialized');
+        }
+
+        this.supabase = window.supabase;
+        console.log('Storage Manager: Supabase connected');
     }
 
     generateStudentId() {
         const year = new Date().getFullYear().toString().substr(-2);
-        const existing = this.getStudents().length;
-        return `BTF${year}${(existing + 1).toString().padStart(4, '0')}`;
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `BTF${year}${random}`;
     }
 
     generateInvoiceNumber() {
         const year = new Date().getFullYear();
         const month = (new Date().getMonth() + 1).toString().padStart(2, '0');
-        const existing = this.getPayments().length;
-        return `INV${year}${month}${(existing + 1).toString().padStart(4, '0')}`;
+        const random = Math.floor(Math.random() * 10000).toString().padStart(4, '0');
+        return `INV${year}${month}${random}`;
     }
 
-    // Activity logging
-    addActivity(type, description, data = {}) {
-        const activities = this.getActivities();
-        const activity = {
-            id: this.generateId('activity'),
-            type,
-            description,
-            data,
-            timestamp: new Date().toISOString(),
-            user: window.authManager.getCurrentUser()?.username || 'System'
-        };
+    async addActivity(type, description, data = {}) {
+        try {
+            const user = window.authManager?.getCurrentUser();
 
-        activities.unshift(activity); // Add to beginning
-        
-        // Keep only last 100 activities
-        if (activities.length > 100) {
-            activities.splice(100);
+            const { data: activity, error } = await this.supabase
+                .from('activities')
+                .insert([{
+                    type,
+                    description,
+                    data,
+                    user_id: user?.id || null,
+                    username: user?.username || 'System'
+                }])
+                .select()
+                .single();
+
+            if (error) throw error;
+            return activity;
+        } catch (error) {
+            console.error('Add activity error:', error);
+            return null;
         }
-
-        localStorage.setItem('btf_activities', JSON.stringify(activities));
-        return activity;
     }
 
-    // Batch operations
-    addBatch(batchData) {
-        const batches = this.getBatches();
-        const batch = {
-            id: this.generateId('batch'),
-            ...batchData,
-            createdAt: new Date().toISOString()
-        };
+    async addBatch(batchData) {
+        try {
+            const { data: batch, error } = await this.supabase
+                .from('batches')
+                .insert([{ name: batchData.name }])
+                .select()
+                .single();
 
-        batches.push(batch);
-        localStorage.setItem('btf_batches', JSON.stringify(batches));
-        this.addActivity('batch_created', `Batch "${batch.name}" created`, { batchId: batch.id });
-        return batch;
-    }
+            if (error) throw error;
 
-    updateBatch(id, updates) {
-        const batches = this.getBatches();
-        const index = batches.findIndex(batch => batch.id === id);
-        
-        if (index !== -1) {
-            batches[index] = { ...batches[index], ...updates, updatedAt: new Date().toISOString() };
-            localStorage.setItem('btf_batches', JSON.stringify(batches));
-            this.addActivity('batch_updated', `Batch "${batches[index].name}" updated`, { batchId: id });
-            return batches[index];
+            await this.addActivity('batch_created', `Batch "${batch.name}" created`, { batchId: batch.id });
+            return batch;
+        } catch (error) {
+            console.error('Add batch error:', error);
+            throw error;
         }
-        return null;
     }
 
-    deleteBatch(id) {
-        const batches = this.getBatches();
-        const batch = batches.find(b => b.id === id);
-        
-        if (batch) {
-            // Check if batch has courses
-            const hasCourses = this.getCourses().some(course => course.batchId === id);
-            if (hasCourses) {
+    async updateBatch(id, updates) {
+        try {
+            const { data: batch, error } = await this.supabase
+                .from('batches')
+                .update({ name: updates.name })
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('batch_updated', `Batch "${batch.name}" updated`, { batchId: id });
+            return batch;
+        } catch (error) {
+            console.error('Update batch error:', error);
+            return null;
+        }
+    }
+
+    async deleteBatch(id) {
+        try {
+            const { data: batch } = await this.supabase
+                .from('batches')
+                .select('name')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!batch) {
+                return { success: false, message: 'Batch not found' };
+            }
+
+            const { data: courses } = await this.supabase
+                .from('courses')
+                .select('id')
+                .eq('batch_id', id)
+                .limit(1);
+
+            if (courses && courses.length > 0) {
                 return { success: false, message: 'Cannot delete batch with existing courses' };
             }
 
-            const filteredBatches = batches.filter(b => b.id !== id);
-            localStorage.setItem('btf_batches', JSON.stringify(filteredBatches));
-            this.addActivity('batch_deleted', `Batch "${batch.name}" deleted`, { batchId: id });
+            const { error } = await this.supabase
+                .from('batches')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            await this.addActivity('batch_deleted', `Batch "${batch.name}" deleted`, { batchId: id });
             return { success: true };
+        } catch (error) {
+            console.error('Delete batch error:', error);
+            return { success: false, message: 'Failed to delete batch' };
         }
-        return { success: false, message: 'Batch not found' };
     }
 
-    // Course operations
-    addCourse(courseData) {
-        const courses = this.getCourses();
-        const course = {
-            id: this.generateId('course'),
-            ...courseData,
-            createdAt: new Date().toISOString()
-        };
+    async addCourse(courseData) {
+        try {
+            const { data: course, error } = await this.supabase
+                .from('courses')
+                .insert([{
+                    name: courseData.name,
+                    batch_id: courseData.batchId
+                }])
+                .select()
+                .single();
 
-        courses.push(course);
-        localStorage.setItem('btf_courses', JSON.stringify(courses));
-        this.addActivity('course_created', `Course "${course.name}" created`, { courseId: course.id });
-        return course;
-    }
+            if (error) throw error;
 
-    updateCourse(id, updates) {
-        const courses = this.getCourses();
-        const index = courses.findIndex(course => course.id === id);
-        
-        if (index !== -1) {
-            courses[index] = { ...courses[index], ...updates, updatedAt: new Date().toISOString() };
-            localStorage.setItem('btf_courses', JSON.stringify(courses));
-            this.addActivity('course_updated', `Course "${courses[index].name}" updated`, { courseId: id });
-            return courses[index];
+            await this.addActivity('course_created', `Course "${course.name}" created`, { courseId: course.id });
+            return course;
+        } catch (error) {
+            console.error('Add course error:', error);
+            throw error;
         }
-        return null;
     }
 
-    deleteCourse(id) {
-        const courses = this.getCourses();
-        const course = courses.find(c => c.id === id);
-        
-        if (course) {
-            // Check if course has months
-            const hasMonths = this.getMonths().some(month => month.courseId === id);
-            if (hasMonths) {
+    async updateCourse(id, updates) {
+        try {
+            const { data: course, error } = await this.supabase
+                .from('courses')
+                .update({ name: updates.name })
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('course_updated', `Course "${course.name}" updated`, { courseId: id });
+            return course;
+        } catch (error) {
+            console.error('Update course error:', error);
+            return null;
+        }
+    }
+
+    async deleteCourse(id) {
+        try {
+            const { data: course } = await this.supabase
+                .from('courses')
+                .select('name')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!course) {
+                return { success: false, message: 'Course not found' };
+            }
+
+            const { data: months } = await this.supabase
+                .from('months')
+                .select('id')
+                .eq('course_id', id)
+                .limit(1);
+
+            if (months && months.length > 0) {
                 return { success: false, message: 'Cannot delete course with existing months' };
             }
 
-            const filteredCourses = courses.filter(c => c.id !== id);
-            localStorage.setItem('btf_courses', JSON.stringify(filteredCourses));
-            this.addActivity('course_deleted', `Course "${course.name}" deleted`, { courseId: id });
+            const { error } = await this.supabase
+                .from('courses')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            await this.addActivity('course_deleted', `Course "${course.name}" deleted`, { courseId: id });
             return { success: true };
+        } catch (error) {
+            console.error('Delete course error:', error);
+            return { success: false, message: 'Failed to delete course' };
         }
-        return { success: false, message: 'Course not found' };
     }
 
-    // Month operations
-    addMonth(monthData) {
-        const months = this.getMonths();
-        const month = {
-            id: this.generateId('month'),
-            ...monthData,
-            monthNumber: monthData.monthNumber || 1,
-            createdAt: new Date().toISOString()
-        };
+    async addMonth(monthData) {
+        try {
+            const { data: month, error } = await this.supabase
+                .from('months')
+                .insert([{
+                    name: monthData.name,
+                    month_number: monthData.monthNumber || 1,
+                    course_id: monthData.courseId,
+                    payment: monthData.payment
+                }])
+                .select()
+                .single();
 
-        months.push(month);
-        localStorage.setItem('btf_months', JSON.stringify(months));
-        this.addActivity('month_created', `Month "${month.name}" created`, { monthId: month.id });
-        return month;
-    }
+            if (error) throw error;
 
-    updateMonth(id, updates) {
-        const months = this.getMonths();
-        const index = months.findIndex(month => month.id === id);
-        
-        if (index !== -1) {
-            months[index] = { ...months[index], ...updates, updatedAt: new Date().toISOString() };
-            localStorage.setItem('btf_months', JSON.stringify(months));
-            this.addActivity('month_updated', `Month "${months[index].name}" updated`, { monthId: id });
-            return months[index];
+            await this.addActivity('month_created', `Month "${month.name}" created`, { monthId: month.id });
+            return month;
+        } catch (error) {
+            console.error('Add month error:', error);
+            throw error;
         }
-        return null;
     }
 
-    deleteMonth(id) {
-        const months = this.getMonths();
-        const month = months.find(m => m.id === id);
-        
-        if (month) {
-            const filteredMonths = months.filter(m => m.id !== id);
-            localStorage.setItem('btf_months', JSON.stringify(filteredMonths));
-            this.addActivity('month_deleted', `Month "${month.name}" deleted`, { monthId: id });
+    async updateMonth(id, updates) {
+        try {
+            const updateData = {};
+            if (updates.name) updateData.name = updates.name;
+            if (updates.monthNumber) updateData.month_number = updates.monthNumber;
+            if (updates.payment !== undefined) updateData.payment = updates.payment;
+
+            const { data: month, error } = await this.supabase
+                .from('months')
+                .update(updateData)
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('month_updated', `Month "${month.name}" updated`, { monthId: id });
+            return month;
+        } catch (error) {
+            console.error('Update month error:', error);
+            return null;
+        }
+    }
+
+    async deleteMonth(id) {
+        try {
+            const { data: month } = await this.supabase
+                .from('months')
+                .select('name')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!month) {
+                return { success: false, message: 'Month not found' };
+            }
+
+            const { error } = await this.supabase
+                .from('months')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            await this.addActivity('month_deleted', `Month "${month.name}" deleted`, { monthId: id });
             return { success: true };
+        } catch (error) {
+            console.error('Delete month error:', error);
+            return { success: false, message: 'Failed to delete month' };
         }
-        return { success: false, message: 'Month not found' };
     }
 
-    // Institution operations
-    addInstitution(institutionData) {
-        const institutions = this.getInstitutions();
-        const institution = {
-            id: this.generateId('institution'),
-            ...institutionData,
-            createdAt: new Date().toISOString()
-        };
+    async addInstitution(institutionData) {
+        try {
+            const { data: institution, error } = await this.supabase
+                .from('institutions')
+                .insert([{
+                    name: institutionData.name,
+                    address: institutionData.address || ''
+                }])
+                .select()
+                .single();
 
-        institutions.push(institution);
-        localStorage.setItem('btf_institutions', JSON.stringify(institutions));
-        this.addActivity('institution_created', `Institution "${institution.name}" created`, { institutionId: institution.id });
-        return institution;
-    }
+            if (error) throw error;
 
-    updateInstitution(id, updates) {
-        const institutions = this.getInstitutions();
-        const index = institutions.findIndex(institution => institution.id === id);
-        
-        if (index !== -1) {
-            institutions[index] = { ...institutions[index], ...updates, updatedAt: new Date().toISOString() };
-            localStorage.setItem('btf_institutions', JSON.stringify(institutions));
-            this.addActivity('institution_updated', `Institution "${institutions[index].name}" updated`, { institutionId: id });
-            return institutions[index];
+            await this.addActivity('institution_created', `Institution "${institution.name}" created`, { institutionId: institution.id });
+            return institution;
+        } catch (error) {
+            console.error('Add institution error:', error);
+            throw error;
         }
-        return null;
     }
 
-    deleteInstitution(id) {
-        const institutions = this.getInstitutions();
-        const institution = institutions.find(i => i.id === id);
-        
-        if (institution) {
-            // Check if institution has students
-            const hasStudents = this.getStudents().some(student => student.institutionId === id);
-            if (hasStudents) {
+    async updateInstitution(id, updates) {
+        try {
+            const updateData = {};
+            if (updates.name) updateData.name = updates.name;
+            if (updates.address !== undefined) updateData.address = updates.address;
+
+            const { data: institution, error } = await this.supabase
+                .from('institutions')
+                .update(updateData)
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('institution_updated', `Institution "${institution.name}" updated`, { institutionId: id });
+            return institution;
+        } catch (error) {
+            console.error('Update institution error:', error);
+            return null;
+        }
+    }
+
+    async deleteInstitution(id) {
+        try {
+            const { data: institution } = await this.supabase
+                .from('institutions')
+                .select('name')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!institution) {
+                return { success: false, message: 'Institution not found' };
+            }
+
+            const { data: students } = await this.supabase
+                .from('students')
+                .select('id')
+                .eq('institution_id', id)
+                .limit(1);
+
+            if (students && students.length > 0) {
                 return { success: false, message: 'Cannot delete institution with existing students' };
             }
 
-            const filteredInstitutions = institutions.filter(i => i.id !== id);
-            localStorage.setItem('btf_institutions', JSON.stringify(filteredInstitutions));
-            this.addActivity('institution_deleted', `Institution "${institution.name}" deleted`, { institutionId: id });
+            const { error } = await this.supabase
+                .from('institutions')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            await this.addActivity('institution_deleted', `Institution "${institution.name}" deleted`, { institutionId: id });
             return { success: true };
+        } catch (error) {
+            console.error('Delete institution error:', error);
+            return { success: false, message: 'Failed to delete institution' };
         }
-        return { success: false, message: 'Institution not found' };
     }
 
-    // Student operations
-    addStudent(studentData) {
-        const students = this.getStudents();
-        const student = {
-            id: this.generateId('student'),
-            ...studentData,
-            studentId: this.generateStudentId(),
-            enrolledCourses: studentData.enrolledCourses || [],
-            createdAt: new Date().toISOString()
-        };
+    async addStudent(studentData) {
+        try {
+            const studentId = this.generateStudentId();
 
-        students.push(student);
-        localStorage.setItem('btf_students', JSON.stringify(students));
-        this.addActivity('student_added', `Student "${student.name}" added with ID ${student.studentId}`, { studentId: student.id });
-        return student;
-    }
+            const { data: student, error } = await this.supabase
+                .from('students')
+                .insert([{
+                    student_id: studentId,
+                    name: studentData.name,
+                    institution_id: studentData.institutionId,
+                    gender: studentData.gender,
+                    phone: studentData.phone,
+                    guardian_name: studentData.guardianName,
+                    guardian_phone: studentData.guardianPhone,
+                    batch_id: studentData.batchId,
+                    enrolled_courses: studentData.enrolledCourses || []
+                }])
+                .select()
+                .single();
 
-    updateStudent(id, updates) {
-        const students = this.getStudents();
-        const index = students.findIndex(student => student.id === id);
-        
-        if (index !== -1) {
-            students[index] = { ...students[index], ...updates, updatedAt: new Date().toISOString() };
-            localStorage.setItem('btf_students', JSON.stringify(students));
-            this.addActivity('student_updated', `Student "${students[index].name}" updated`, { studentId: id });
-            return students[index];
+            if (error) throw error;
+
+            await this.addActivity('student_added', `Student "${student.name}" added with ID ${student.student_id}`, { studentId: student.id });
+            return student;
+        } catch (error) {
+            console.error('Add student error:', error);
+            throw error;
         }
-        return null;
     }
 
-    deleteStudent(id) {
-        const students = this.getStudents();
-        const student = students.find(s => s.id === id);
-        
-        if (student) {
-            const filteredStudents = students.filter(s => s.id !== id);
-            localStorage.setItem('btf_students', JSON.stringify(filteredStudents));
-            this.addActivity('student_deleted', `Student "${student.name}" deleted`, { studentId: id });
+    async updateStudent(id, updates) {
+        try {
+            const updateData = {};
+            if (updates.name) updateData.name = updates.name;
+            if (updates.institutionId) updateData.institution_id = updates.institutionId;
+            if (updates.gender) updateData.gender = updates.gender;
+            if (updates.phone) updateData.phone = updates.phone;
+            if (updates.guardianName) updateData.guardian_name = updates.guardianName;
+            if (updates.guardianPhone) updateData.guardian_phone = updates.guardianPhone;
+            if (updates.batchId) updateData.batch_id = updates.batchId;
+            if (updates.enrolledCourses) updateData.enrolled_courses = updates.enrolledCourses;
+
+            const { data: student, error } = await this.supabase
+                .from('students')
+                .update(updateData)
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('student_updated', `Student "${student.name}" updated`, { studentId: id });
+            return student;
+        } catch (error) {
+            console.error('Update student error:', error);
+            return null;
+        }
+    }
+
+    async deleteStudent(id) {
+        try {
+            const { data: student } = await this.supabase
+                .from('students')
+                .select('name')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!student) {
+                return { success: false, message: 'Student not found' };
+            }
+
+            const { error } = await this.supabase
+                .from('students')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+
+            await this.addActivity('student_deleted', `Student "${student.name}" deleted`, { studentId: id });
             return { success: true };
+        } catch (error) {
+            console.error('Delete student error:', error);
+            return { success: false, message: 'Failed to delete student' };
         }
-        return { success: false, message: 'Student not found' };
     }
 
-    // Payment operations
-    addPayment(paymentData) {
-        const payments = this.getPayments();
-        const payment = {
-            id: this.generateId('payment'),
-            ...paymentData,
-            invoiceNumber: this.generateInvoiceNumber(),
-            monthPayments: paymentData.monthPayments || [],
-            createdAt: new Date().toISOString()
-        };
-
-        payments.push(payment);
-        localStorage.setItem('btf_payments', JSON.stringify(payments));
-        this.addActivity('payment_received', `Payment of ৳${payment.paidAmount} received from ${payment.studentName}`, { paymentId: payment.id });
-        return payment;
-    }
-
-    // Getter methods
-    getBatches() {
+    async addPayment(paymentData) {
         try {
-            return JSON.parse(localStorage.getItem('btf_batches') || '[]');
-        } catch (e) {
+            const invoiceNumber = this.generateInvoiceNumber();
+            const user = window.authManager?.getCurrentUser();
+
+            const { data: payment, error } = await this.supabase
+                .from('payments')
+                .insert([{
+                    invoice_number: invoiceNumber,
+                    student_id: paymentData.studentId,
+                    student_name: paymentData.studentName,
+                    student_display_id: paymentData.studentDisplayId,
+                    batch_id: paymentData.batchId,
+                    courses: paymentData.courses || [],
+                    months: paymentData.months || [],
+                    month_payments: paymentData.monthPayments || [],
+                    total_amount: paymentData.totalAmount,
+                    discount_type: paymentData.discountType || 'fixed',
+                    discount_amount: paymentData.discountAmount || 0,
+                    discount_applicable_months: paymentData.discountApplicableMonths || [],
+                    discounted_amount: paymentData.discountedAmount,
+                    paid_amount: paymentData.paidAmount,
+                    due_amount: paymentData.dueAmount || 0,
+                    reference: paymentData.reference || '',
+                    received_by: paymentData.receivedBy || '',
+                    created_by: user?.id || null
+                }])
+                .select()
+                .single();
+
+            if (error) throw error;
+
+            await this.addActivity('payment_received', `Payment of ৳${payment.paid_amount} received from ${payment.student_name}`, { paymentId: payment.id });
+            return payment;
+        } catch (error) {
+            console.error('Add payment error:', error);
+            throw error;
+        }
+    }
+
+    async getBatches() {
+        try {
+            const { data, error } = await this.supabase
+                .from('batches')
+                .select('*')
+                .order('created_at', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get batches error:', error);
             return [];
         }
     }
 
-    getCourses() {
+    async getCourses() {
         try {
-            return JSON.parse(localStorage.getItem('btf_courses') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('courses')
+                .select('*')
+                .order('created_at', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get courses error:', error);
             return [];
         }
     }
 
-    getMonths() {
+    async getMonths() {
         try {
-            return JSON.parse(localStorage.getItem('btf_months') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('months')
+                .select('*')
+                .order('month_number', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get months error:', error);
             return [];
         }
     }
 
-    getInstitutions() {
+    async getInstitutions() {
         try {
-            return JSON.parse(localStorage.getItem('btf_institutions') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('institutions')
+                .select('*')
+                .order('name', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get institutions error:', error);
             return [];
         }
     }
 
-    getStudents() {
+    async getStudents() {
         try {
-            return JSON.parse(localStorage.getItem('btf_students') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('students')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get students error:', error);
             return [];
         }
     }
 
-    getPayments() {
+    async getPayments() {
         try {
-            return JSON.parse(localStorage.getItem('btf_payments') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('payments')
+                .select('*')
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get payments error:', error);
             return [];
         }
     }
 
-    getActivities() {
+    async getActivities() {
         try {
-            return JSON.parse(localStorage.getItem('btf_activities') || '[]');
-        } catch (e) {
+            const { data, error } = await this.supabase
+                .from('activities')
+                .select('*')
+                .order('created_at', { ascending: false })
+                .limit(100);
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get activities error:', error);
             return [];
         }
     }
 
-    // Utility methods
-    getBatchById(id) {
-        return this.getBatches().find(batch => batch.id === id);
+    async getBatchById(id) {
+        try {
+            const { data, error } = await this.supabase
+                .from('batches')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get batch error:', error);
+            return null;
+        }
     }
 
-    getCourseById(id) {
-        return this.getCourses().find(course => course.id === id);
+    async getCourseById(id) {
+        try {
+            const { data, error } = await this.supabase
+                .from('courses')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get course error:', error);
+            return null;
+        }
     }
 
-    getMonthById(id) {
-        return this.getMonths().find(month => month.id === id);
+    async getMonthById(id) {
+        try {
+            const { data, error } = await this.supabase
+                .from('months')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get month error:', error);
+            return null;
+        }
     }
 
-    getInstitutionById(id) {
-        return this.getInstitutions().find(institution => institution.id === id);
+    async getInstitutionById(id) {
+        try {
+            const { data, error } = await this.supabase
+                .from('institutions')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get institution error:', error);
+            return null;
+        }
     }
 
-    getStudentById(id) {
-        return this.getStudents().find(student => student.id === id);
+    async getStudentById(id) {
+        try {
+            const { data, error } = await this.supabase
+                .from('students')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get student error:', error);
+            return null;
+        }
     }
 
-    getStudentByStudentId(studentId) {
-        return this.getStudents().find(student => student.studentId === studentId);
+    async getStudentByStudentId(studentId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('students')
+                .select('*')
+                .eq('student_id', studentId)
+                .maybeSingle();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Get student error:', error);
+            return null;
+        }
     }
 
-    getCoursesByBatch(batchId) {
-        return this.getCourses().filter(course => course.batchId === batchId);
+    async getCoursesByBatch(batchId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('courses')
+                .select('*')
+                .eq('batch_id', batchId)
+                .order('created_at', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get courses error:', error);
+            return [];
+        }
     }
 
-    getMonthsByCourse(courseId) {
-        return this.getMonths().filter(month => month.courseId === courseId);
+    async getMonthsByCourse(courseId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('months')
+                .select('*')
+                .eq('course_id', courseId)
+                .order('month_number', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get months error:', error);
+            return [];
+        }
     }
 
-    getStudentsByBatch(batchId) {
-        return this.getStudents().filter(student => student.batchId === batchId);
+    async getStudentsByBatch(batchId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('students')
+                .select('*')
+                .eq('batch_id', batchId)
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get students error:', error);
+            return [];
+        }
     }
 
-    getPaymentsByStudent(studentId) {
-        return this.getPayments().filter(payment => payment.studentId === studentId);
+    async getPaymentsByStudent(studentId) {
+        try {
+            const { data, error } = await this.supabase
+                .from('payments')
+                .select('*')
+                .eq('student_id', studentId)
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get payments error:', error);
+            return [];
+        }
     }
 
-    // Get month payment details for a student
-    getMonthPaymentDetails(studentId) {
-        const payments = this.getPaymentsByStudent(studentId);
+    async getMonthPaymentDetails(studentId) {
+        const payments = await this.getPaymentsByStudent(studentId);
         const monthPayments = {};
-        
-        payments.forEach(payment => {
-            if (payment.monthPayments) {
-                payment.monthPayments.forEach(monthPayment => {
+
+        for (const payment of payments) {
+            if (payment.month_payments && Array.isArray(payment.month_payments)) {
+                for (const monthPayment of payment.month_payments) {
                     const monthId = monthPayment.monthId;
                     if (!monthPayments[monthId]) {
                         monthPayments[monthId] = {
@@ -418,74 +774,128 @@ class StorageManager {
                             payments: []
                         };
                     }
-                    monthPayments[monthId].totalPaid += monthPayment.paidAmount;
+                    monthPayments[monthId].totalPaid += monthPayment.paidAmount || 0;
                     monthPayments[monthId].totalDiscount += (monthPayment.discountAmount || 0);
                     monthPayments[monthId].payments.push({
                         paymentId: payment.id,
                         paidAmount: monthPayment.paidAmount,
                         discountAmount: monthPayment.discountAmount || 0,
-                        date: payment.createdAt
+                        date: payment.created_at
                     });
-                });
-            } else if (payment.months) {
-                // Handle legacy payments
-                payment.months.forEach(monthId => {
-                    const month = this.getMonthById(monthId);
-                    if (month) {
-                        if (!monthPayments[monthId]) {
-                            monthPayments[monthId] = {
-                                totalPaid: 0,
-                                totalDiscount: 0,
-                                monthFee: month.payment,
-                                payments: []
-                            };
-                        }
-                        const amountPaid = payment.paidAmount / payment.months.length;
-                        let discountAmount = 0;
-                        if (payment.discountAmount > 0 && payment.discountApplicableMonths) {
-                            if (payment.discountApplicableMonths.includes(monthId)) {
-                                const applicableMonthsCount = payment.discountApplicableMonths.length;
-                                if (applicableMonthsCount > 0) {
-                                    if (payment.discountType === 'percentage') {
-                                        const discountPercentage = parseFloat(payment.discountAmount || 0);
-                                        discountAmount = (month.payment * discountPercentage) / 100;
-                                    } else {
-                                        discountAmount = payment.discountAmount / applicableMonthsCount;
-                                    }
-                                }
-                            }
-                        } else if (payment.discountAmount > 0) {
-                            if (payment.discountType === 'percentage') {
-                                const discountPercentage = parseFloat(payment.discountAmount || 0);
-                                discountAmount = (month.payment * discountPercentage) / 100;
-                            } else {
-                                discountAmount = payment.discountAmount / payment.months.length;
-                            }
-                        }
-                        
-                        monthPayments[monthId].totalPaid += amountPaid;
-                        monthPayments[monthId].totalDiscount += discountAmount;
-                        monthPayments[monthId].payments.push({
-                            paymentId: payment.id,
-                            paidAmount: amountPaid,
-                            discountAmount: discountAmount,
-                            date: payment.createdAt
-                        });
-                    }
-                });
+                }
             }
-        });
-        
+        }
+
         return monthPayments;
     }
 
-    // Get payments with discounts
-    getDiscountedPayments() {
-        return this.getPayments().filter(payment => 
-            payment.discountAmount && payment.discountAmount > 0
-        );
+    async getDiscountedPayments() {
+        try {
+            const { data, error } = await this.supabase
+                .from('payments')
+                .select('*')
+                .gt('discount_amount', 0)
+                .order('created_at', { ascending: false });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get discounted payments error:', error);
+            return [];
+        }
+    }
+
+    async getReferenceOptions() {
+        try {
+            const { data, error } = await this.supabase
+                .from('reference_options')
+                .select('*')
+                .order('name', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get reference options error:', error);
+            return [];
+        }
+    }
+
+    async addReferenceOption(name) {
+        try {
+            const { data, error } = await this.supabase
+                .from('reference_options')
+                .insert([{ name }])
+                .select()
+                .single();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Add reference option error:', error);
+            throw error;
+        }
+    }
+
+    async deleteReferenceOption(id) {
+        try {
+            const { error } = await this.supabase
+                .from('reference_options')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error('Delete reference option error:', error);
+            return { success: false, message: 'Failed to delete reference option' };
+        }
+    }
+
+    async getReceiverOptions() {
+        try {
+            const { data, error } = await this.supabase
+                .from('receiver_options')
+                .select('*')
+                .order('name', { ascending: true });
+
+            if (error) throw error;
+            return data || [];
+        } catch (error) {
+            console.error('Get receiver options error:', error);
+            return [];
+        }
+    }
+
+    async addReceiverOption(name) {
+        try {
+            const { data, error } = await this.supabase
+                .from('receiver_options')
+                .insert([{ name }])
+                .select()
+                .single();
+
+            if (error) throw error;
+            return data;
+        } catch (error) {
+            console.error('Add receiver option error:', error);
+            throw error;
+        }
+    }
+
+    async deleteReceiverOption(id) {
+        try {
+            const { error } = await this.supabase
+                .from('receiver_options')
+                .delete()
+                .eq('id', id);
+
+            if (error) throw error;
+            return { success: true };
+        } catch (error) {
+            console.error('Delete receiver option error:', error);
+            return { success: false, message: 'Failed to delete receiver option' };
+        }
     }
 }
 
-// Global storage manager instance
 window.storageManager = new StorageManager();

@@ -3,30 +3,31 @@ class AuthManager {
         this.currentUser = null;
         this.maxLoginAttempts = 5;
         this.loginAttempts = this.loadLoginAttempts();
-        this.supabase = null;
+        this.localDB = null;
         this.initialized = false;
     }
 
     async init() {
         if (this.initialized) return;
 
-        await this.waitForSupabase();
+        await this.waitForLocalDB();
         this.initialized = true;
         await this.checkSession();
     }
 
-    async waitForSupabase() {
+    async waitForLocalDB() {
         let attempts = 0;
-        while (!window.supabase && attempts < 50) {
+        while (!window.localAuthDB && attempts < 50) {
             await new Promise(resolve => setTimeout(resolve, 100));
             attempts++;
         }
 
-        if (!window.supabase) {
-            throw new Error('Supabase client not initialized');
+        if (!window.localAuthDB) {
+            throw new Error('Local auth database not initialized');
         }
 
-        this.supabase = window.supabase;
+        this.localDB = window.localAuthDB;
+        console.log('Local auth database initialized successfully');
     }
 
     async checkSession() {
@@ -39,14 +40,11 @@ class AuthManager {
                 const maxSessionAge = 24 * 60 * 60 * 1000;
 
                 if (sessionAge < maxSessionAge && parsed.user) {
-                    const { data: userData, error } = await this.supabase
-                        .from('users')
-                        .select('id, username, email, role')
-                        .eq('id', parsed.user.id)
-                        .maybeSingle();
+                    const userData = this.localDB.getUserById(parsed.user.id);
 
-                    if (userData && !error) {
-                        this.currentUser = userData;
+                    if (userData) {
+                        const { password_hash, ...userWithoutHash } = userData;
+                        this.currentUser = userWithoutHash;
                     } else {
                         localStorage.removeItem('btf_user_session');
                     }
@@ -115,39 +113,19 @@ class AuthManager {
                 };
             }
 
-            console.log('Querying users table...');
-            const { data: users, error: userError } = await this.supabase
-                .from('users')
-                .select('id, username, email, role, password_hash')
-                .eq('username', username)
-                .maybeSingle();
+            console.log('Looking up user in local database...');
+            const user = this.localDB.getUserByUsername(username);
 
-            if (userError) {
-                console.error('Database error during login:', userError);
-                this.recordLoginAttempt(username, false);
-                return { success: false, message: 'Login failed. Please try again.' };
-            }
-
-            if (!users) {
+            if (!user) {
                 console.log('No user found with username:', username);
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
             }
 
             console.log('User found, verifying password...');
-            const { data: verificationResult, error: verifyError } = await this.supabase
-                .rpc('verify_password', {
-                    password: password,
-                    password_hash: users.password_hash
-                });
+            const isValidPassword = await this.localDB.verifyPassword(password, user.password_hash);
 
-            if (verifyError) {
-                console.error('Password verification error:', verifyError);
-                this.recordLoginAttempt(username, false);
-                return { success: false, message: 'Login failed. Please try again.' };
-            }
-
-            if (!verificationResult) {
+            if (!isValidPassword) {
                 console.log('Password verification failed');
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
@@ -156,13 +134,7 @@ class AuthManager {
             console.log('Login successful!');
             this.recordLoginAttempt(username, true);
 
-            const userWithoutHash = {
-                id: users.id,
-                username: users.username,
-                email: users.email,
-                role: users.role
-            };
-
+            const { password_hash, ...userWithoutHash } = user;
             this.currentUser = userWithoutHash;
 
             localStorage.setItem('btf_user_session', JSON.stringify({
@@ -180,7 +152,7 @@ class AuthManager {
     }
 
     async initializeDemoUsers() {
-        console.log('Demo users are pre-configured in the database');
+        console.log('Demo users are pre-configured in local storage');
     }
 
     async logout() {
@@ -204,43 +176,8 @@ class AuthManager {
 
     async addUser(username, password, role) {
         try {
-            const { data: existingUsers } = await this.supabase
-                .from('users')
-                .select('username')
-                .eq('username', username)
-                .maybeSingle();
-
-            if (existingUsers) {
-                return { success: false, message: 'Username already exists' };
-            }
-
             const email = `${username}@breakthefear.local`;
-
-            const { data: hashedPassword, error: hashError } = await this.supabase
-                .rpc('hash_password', { password: password });
-
-            if (hashError || !hashedPassword) {
-                console.error('Password hashing error:', hashError);
-                return { success: false, message: 'Failed to create user' };
-            }
-
-            const { data: newUser, error: insertError } = await this.supabase
-                .from('users')
-                .insert([{
-                    username: username,
-                    email: email,
-                    role: role,
-                    password_hash: hashedPassword
-                }])
-                .select('id, username, email, role')
-                .single();
-
-            if (insertError) {
-                console.error('User insert error:', insertError);
-                return { success: false, message: 'Failed to create user' };
-            }
-
-            return { success: true, user: newUser };
+            return await this.localDB.addUser(username, email, password, role);
         } catch (error) {
             console.error('Add user error:', error);
             return { success: false, message: 'Failed to add user' };
@@ -249,59 +186,7 @@ class AuthManager {
 
     async updateUser(id, updates) {
         try {
-            const { data: existingUser } = await this.supabase
-                .from('users')
-                .select('id, username, email, role')
-                .eq('id', id)
-                .maybeSingle();
-
-            if (!existingUser) {
-                return { success: false, message: 'User not found' };
-            }
-
-            if (updates.username && updates.username !== existingUser.username) {
-                const { data: duplicateCheck } = await this.supabase
-                    .from('users')
-                    .select('username')
-                    .eq('username', updates.username)
-                    .neq('id', id)
-                    .maybeSingle();
-
-                if (duplicateCheck) {
-                    return { success: false, message: 'Username already exists' };
-                }
-            }
-
-            const updateData = {};
-            if (updates.username) updateData.username = updates.username;
-            if (updates.email) updateData.email = updates.email;
-            if (updates.role) updateData.role = updates.role;
-
-            if (updates.password) {
-                const { data: hashedPassword, error: hashError } = await this.supabase
-                    .rpc('hash_password', { password: updates.password });
-
-                if (hashError || !hashedPassword) {
-                    console.error('Password hashing error:', hashError);
-                    return { success: false, message: 'Failed to update password' };
-                }
-
-                updateData.password_hash = hashedPassword;
-            }
-
-            const { data: updatedUser, error } = await this.supabase
-                .from('users')
-                .update(updateData)
-                .eq('id', id)
-                .select('id, username, email, role')
-                .single();
-
-            if (error) {
-                console.error('Update user error:', error);
-                return { success: false, message: 'Failed to update user' };
-            }
-
-            return { success: true, user: updatedUser };
+            return await this.localDB.updateUser(id, updates);
         } catch (error) {
             console.error('Update user error:', error);
             return { success: false, message: 'Failed to update user' };
@@ -310,38 +195,7 @@ class AuthManager {
 
     async deleteUser(id) {
         try {
-            const { data: user } = await this.supabase
-                .from('users')
-                .select('*')
-                .eq('id', id)
-                .maybeSingle();
-
-            if (!user) {
-                return { success: false, message: 'User not found' };
-            }
-
-            if (user.role === 'developer') {
-                const { data: developers } = await this.supabase
-                    .from('users')
-                    .select('id')
-                    .eq('role', 'developer');
-
-                if (developers && developers.length <= 1) {
-                    return { success: false, message: 'Cannot delete the last developer account' };
-                }
-            }
-
-            const { error } = await this.supabase
-                .from('users')
-                .delete()
-                .eq('id', id);
-
-            if (error) {
-                console.error('Delete user error:', error);
-                return { success: false, message: 'Failed to delete user' };
-            }
-
-            return { success: true };
+            return this.localDB.deleteUser(id);
         } catch (error) {
             console.error('Delete user error:', error);
             return { success: false, message: 'Failed to delete user' };
@@ -350,17 +204,7 @@ class AuthManager {
 
     async getAllUsers() {
         try {
-            const { data: users, error } = await this.supabase
-                .from('users')
-                .select('id, username, role')
-                .order('username');
-
-            if (error) {
-                console.error('Get all users error:', error);
-                return [];
-            }
-
-            return users || [];
+            return this.localDB.getUsersForDisplay();
         } catch (error) {
             console.error('Get all users error:', error);
             return [];

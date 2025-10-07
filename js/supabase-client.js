@@ -8,12 +8,31 @@ if (!supabaseUrl || !supabaseAnonKey) {
     throw new Error('Supabase configuration is missing. Please check your .env file.');
 }
 
+console.log('Initializing Supabase client...');
+console.log('Supabase URL:', supabaseUrl);
+console.log('Anon Key (first 20 chars):', supabaseAnonKey.substring(0, 20) + '...');
+
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     auth: {
-        autoRefreshToken: true,
-        persistSession: true,
-        detectSessionInUrl: true
+        autoRefreshToken: false,
+        persistSession: false,
+        detectSessionInUrl: false
     }
 });
 
 window.supabase = supabase;
+
+console.log('Supabase client initialized successfully');
+
+(async () => {
+    try {
+        const { data, error } = await supabase.from('users').select('username').limit(1);
+        if (error) {
+            console.error('Supabase connection test failed:', error);
+        } else {
+            console.log('Supabase connection test successful');
+        }
+    } catch (err) {
+        console.error('Supabase connection test error:', err);
+    }
+})();

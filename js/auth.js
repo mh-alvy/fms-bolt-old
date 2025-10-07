@@ -107,13 +107,19 @@ class AuthManager {
 
     async login(username, password) {
         try {
+            console.log('=== LOGIN ATTEMPT ===');
+            console.log('Username:', username);
+            console.log('Supabase client available:', !!this.supabase);
+
             if (this.isAccountLocked(username)) {
+                console.log('Account is locked');
                 return {
                     success: false,
                     message: 'Account temporarily locked due to too many failed attempts. Please try again in 15 minutes.'
                 };
             }
 
+            console.log('Querying users table...');
             const { data: users, error: userError } = await this.supabase
                 .from('users')
                 .select('id, username, email, role, password_hash')
@@ -121,15 +127,26 @@ class AuthManager {
                 .maybeSingle();
 
             if (userError) {
-                console.error('Database error during login:', userError);
+                console.error('Database error during login:');
+                console.error('Error message:', userError.message);
+                console.error('Error details:', userError.details);
+                console.error('Error hint:', userError.hint);
+                console.error('Error code:', userError.code);
+                console.error('Full error:', JSON.stringify(userError, null, 2));
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Login failed. Please try again.' };
             }
 
+            console.log('User query result:', users ? 'User found' : 'User not found');
+
             if (!users) {
+                console.log('No user found with username:', username);
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
             }
+
+            console.log('User found, verifying password...');
+            console.log('Password hash length:', users.password_hash?.length);
 
             const { data: verificationResult, error: verifyError } = await this.supabase
                 .rpc('verify_password', {
@@ -138,16 +155,25 @@ class AuthManager {
                 });
 
             if (verifyError) {
-                console.error('Password verification error:', verifyError);
+                console.error('Password verification error:');
+                console.error('Error message:', verifyError.message);
+                console.error('Error details:', verifyError.details);
+                console.error('Error hint:', verifyError.hint);
+                console.error('Error code:', verifyError.code);
+                console.error('Full error:', JSON.stringify(verifyError, null, 2));
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Login failed. Please try again.' };
             }
 
+            console.log('Password verification result:', verificationResult);
+
             if (!verificationResult) {
+                console.log('Password verification failed - incorrect password');
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
             }
 
+            console.log('Login successful!');
             this.recordLoginAttempt(username, true);
 
             const userWithoutHash = {
@@ -166,7 +192,11 @@ class AuthManager {
 
             return { success: true, user: userWithoutHash };
         } catch (error) {
-            console.error('Login error:', error);
+            console.error('=== LOGIN EXCEPTION ===');
+            console.error('Error type:', error.constructor.name);
+            console.error('Error message:', error.message);
+            console.error('Error stack:', error.stack);
+            console.error('Full error:', error);
             this.recordLoginAttempt(username, false);
             return { success: false, message: 'Login failed. Please try again.' };
         }

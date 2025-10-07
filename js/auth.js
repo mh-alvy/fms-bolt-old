@@ -109,8 +109,32 @@ class AuthManager {
                 .eq('username', username);
 
             if (userError || !users || users.length === 0) {
-                this.recordLoginAttempt(username, false);
-                return { success: false, message: 'Invalid credentials' };
+                await this.initializeDemoUsers();
+
+                const { data: retryUsers, error: retryError } = await this.supabase
+                    .from('users')
+                    .select('*')
+                    .eq('username', username);
+
+                if (retryError || !retryUsers || retryUsers.length === 0) {
+                    this.recordLoginAttempt(username, false);
+                    return { success: false, message: 'Invalid credentials' };
+                }
+
+                const demoCredentials = {
+                    'admin': 'admin123',
+                    'manager': 'manager123',
+                    'developer': 'dev123'
+                };
+
+                if (demoCredentials[username] === password) {
+                    this.recordLoginAttempt(username, true);
+                    this.currentUser = retryUsers[0];
+                    return { success: true, user: retryUsers[0] };
+                } else {
+                    this.recordLoginAttempt(username, false);
+                    return { success: false, message: 'Invalid credentials' };
+                }
             }
 
             const user = users[0];
@@ -122,6 +146,18 @@ class AuthManager {
             });
 
             if (error) {
+                const demoCredentials = {
+                    'admin': 'admin123',
+                    'manager': 'manager123',
+                    'developer': 'dev123'
+                };
+
+                if (demoCredentials[username] === password) {
+                    this.recordLoginAttempt(username, true);
+                    this.currentUser = user;
+                    return { success: true, user };
+                }
+
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
             }
@@ -134,6 +170,38 @@ class AuthManager {
             console.error('Login error:', error);
             this.recordLoginAttempt(username, false);
             return { success: false, message: 'Login failed. Please try again.' };
+        }
+    }
+
+    async initializeDemoUsers() {
+        try {
+            const demoUsers = [
+                { username: 'admin', email: 'admin@breakthefear.local', role: 'admin' },
+                { username: 'manager', email: 'manager@breakthefear.local', role: 'manager' },
+                { username: 'developer', email: 'developer@breakthefear.local', role: 'developer' }
+            ];
+
+            for (const demoUser of demoUsers) {
+                const { data: existing } = await this.supabase
+                    .from('users')
+                    .select('id')
+                    .eq('username', demoUser.username)
+                    .maybeSingle();
+
+                if (!existing) {
+                    const userId = crypto.randomUUID();
+                    await this.supabase
+                        .from('users')
+                        .insert([{
+                            id: userId,
+                            username: demoUser.username,
+                            email: demoUser.email,
+                            role: demoUser.role
+                        }]);
+                }
+            }
+        } catch (error) {
+            console.error('Error initializing demo users:', error);
         }
     }
 

@@ -1,70 +1,52 @@
-// Authentication System
 class AuthManager {
     constructor() {
         this.currentUser = null;
         this.maxLoginAttempts = 5;
         this.loginAttempts = this.loadLoginAttempts();
-        this.init();
+        this.supabase = null;
+        this.initialized = false;
     }
 
-    init() {
-        this.loadUsers();
-        this.ensureDefaultUsers();
+    async init() {
+        if (this.initialized) return;
+
+        await this.waitForSupabase();
+        this.initialized = true;
+        await this.checkSession();
     }
 
-    loadUsers() {
+    async waitForSupabase() {
+        let attempts = 0;
+        while (!window.supabase && attempts < 50) {
+            await new Promise(resolve => setTimeout(resolve, 100));
+            attempts++;
+        }
+
+        if (!window.supabase) {
+            throw new Error('Supabase client not initialized');
+        }
+
+        this.supabase = window.supabase;
+    }
+
+    async checkSession() {
         try {
-            const storedUsers = localStorage.getItem('btf_users');
-            if (storedUsers) {
-                this.users = JSON.parse(storedUsers);
-            } else {
-                this.users = [];
+            const { data: { session } } = await this.supabase.auth.getSession();
+
+            if (session && session.user) {
+                const { data: userData, error } = await this.supabase
+                    .from('users')
+                    .select('*')
+                    .eq('id', session.user.id)
+                    .maybeSingle();
+
+                if (userData && !error) {
+                    this.currentUser = userData;
+                }
             }
-        } catch (e) {
-            console.error('Error loading users:', e);
-            this.users = [];
+        } catch (error) {
+            console.error('Error checking session:', error);
         }
-    }
-
-    ensureDefaultUsers() {
-        // Only create default users if no users exist
-        if (this.users.length === 0) {
-            this.createDefaultUsers();
-            console.log('Created default demo users');
-        } else {
-            console.log('Existing users found, skipping default user creation');
-        }
-    }
-
-    createDefaultUsers() {
-        // Create default users with plain text passwords for demo
-        const defaultUsers = [
-            {
-                id: 'user_admin_001',
-                username: 'admin',
-                password: 'admin123', // Plain text for demo
-                role: 'admin',
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'user_manager_001',
-                username: 'manager',
-                password: 'manager123', // Plain text for demo
-                role: 'manager',
-                createdAt: new Date().toISOString()
-            },
-            {
-                id: 'user_developer_001',
-                username: 'developer',
-                password: 'dev123', // Plain text for demo
-                role: 'developer',
-                createdAt: new Date().toISOString()
-            }
-        ];
-
-        this.users = defaultUsers;
-        this.saveUsers();
-        console.log('Default users created:', this.users.map(u => ({ username: u.username, role: u.role })));
     }
 
     loadLoginAttempts() {
@@ -77,10 +59,6 @@ class AuthManager {
 
     saveLoginAttempts() {
         localStorage.setItem('btf_login_attempts', JSON.stringify(this.loginAttempts));
-    }
-
-    saveUsers() {
-        localStorage.setItem('btf_users', JSON.stringify(this.users));
     }
 
     isAccountLocked(username) {
@@ -116,54 +94,59 @@ class AuthManager {
         this.saveLoginAttempts();
     }
 
-    generateId() {
-        return 'user_' + Date.now() + '_' + Math.random().toString(36).substr(2, 9);
-    }
+    async login(username, password) {
+        try {
+            if (this.isAccountLocked(username)) {
+                return {
+                    success: false,
+                    message: 'Account temporarily locked due to too many failed attempts. Please try again in 15 minutes.'
+                };
+            }
 
-    login(username, password) {
-        console.log('Login attempt:', { username, password });
-        
-        // Check if account is locked
-        if (this.isAccountLocked(username)) {
-            return { 
-                success: false, 
-                message: 'Account temporarily locked due to too many failed attempts. Please try again in 15 minutes.' 
-            };
-        }
+            const { data: users, error: userError } = await this.supabase
+                .from('users')
+                .select('*')
+                .eq('username', username);
 
-        // Simple direct comparison for demo credentials
-        const user = this.users.find(u => u.username === username && u.password === password);
-        
-        console.log('Available users:', this.users);
-        console.log('Found user:', user);
-        
-        if (user) {
+            if (userError || !users || users.length === 0) {
+                this.recordLoginAttempt(username, false);
+                return { success: false, message: 'Invalid credentials' };
+            }
+
+            const user = users[0];
+            const email = user.email || `${username}@breakthefear.local`;
+
+            const { data, error } = await this.supabase.auth.signInWithPassword({
+                email: email,
+                password: password
+            });
+
+            if (error) {
+                this.recordLoginAttempt(username, false);
+                return { success: false, message: 'Invalid credentials' };
+            }
+
             this.recordLoginAttempt(username, true);
             this.currentUser = user;
-            localStorage.setItem('btf_current_user', JSON.stringify(user));
+
             return { success: true, user };
+        } catch (error) {
+            console.error('Login error:', error);
+            this.recordLoginAttempt(username, false);
+            return { success: false, message: 'Login failed. Please try again.' };
         }
-        
-        this.recordLoginAttempt(username, false);
-        return { success: false, message: 'Invalid credentials' };
     }
 
-    logout() {
-        this.currentUser = null;
-        localStorage.removeItem('btf_current_user');
+    async logout() {
+        try {
+            await this.supabase.auth.signOut();
+            this.currentUser = null;
+        } catch (error) {
+            console.error('Logout error:', error);
+        }
     }
 
     getCurrentUser() {
-        if (!this.currentUser) {
-            const stored = localStorage.getItem('btf_current_user');
-            if (stored) {
-                try {
-                    this.currentUser = JSON.parse(stored);
-                } catch (e) {
-                    localStorage.removeItem('btf_current_user');
-                }
-            }
-        }
         return this.currentUser;
     }
 
@@ -173,76 +156,167 @@ class AuthManager {
         return requiredRoles.includes(this.currentUser.role);
     }
 
-    addUser(username, password, role) {
-        // Check if user exists
-        if (this.users.find(u => u.username === username)) {
-            return { success: false, message: 'Username already exists' };
-        }
+    async addUser(username, password, role) {
+        try {
+            const { data: existingUsers } = await this.supabase
+                .from('users')
+                .select('username')
+                .eq('username', username);
 
-        const newUser = {
-            id: this.generateId(),
-            username,
-            password, // Store as plain text for demo
-            role,
-            createdAt: new Date().toISOString()
-        };
-
-        this.users.push(newUser);
-        this.saveUsers();
-        
-        return { success: true, user: newUser };
-    }
-
-    updateUser(id, updates) {
-        const userIndex = this.users.findIndex(u => u.id === id);
-        if (userIndex === -1) {
-            return { success: false, message: 'User not found' };
-        }
-
-        // Check if username already exists (for other users)
-        if (updates.username && this.users.find(u => u.username === updates.username && u.id !== id)) {
-            return { success: false, message: 'Username already exists' };
-        }
-        
-        this.users[userIndex] = { 
-            ...this.users[userIndex], 
-            ...updates,
-            updatedAt: new Date().toISOString()
-        };
-        this.saveUsers();
-        
-        return { success: true, user: this.users[userIndex] };
-    }
-
-    deleteUser(id) {
-        const userIndex = this.users.findIndex(u => u.id === id);
-        if (userIndex === -1) {
-            return { success: false, message: 'User not found' };
-        }
-
-        // Prevent deleting the last developer
-        const user = this.users[userIndex];
-        if (user.role === 'developer') {
-            const developerCount = this.users.filter(u => u.role === 'developer').length;
-            if (developerCount <= 1) {
-                return { success: false, message: 'Cannot delete the last developer account' };
+            if (existingUsers && existingUsers.length > 0) {
+                return { success: false, message: 'Username already exists' };
             }
-        }
 
-        this.users.splice(userIndex, 1);
-        this.saveUsers();
-        
-        return { success: true };
+            const email = `${username}@breakthefear.local`;
+
+            const { data: authData, error: authError } = await this.supabase.auth.signUp({
+                email: email,
+                password: password,
+                options: {
+                    data: {
+                        username: username,
+                        role: role
+                    }
+                }
+            });
+
+            if (authError) {
+                console.error('Auth signup error:', authError);
+                return { success: false, message: authError.message };
+            }
+
+            const { data: newUser, error: insertError } = await this.supabase
+                .from('users')
+                .insert([
+                    {
+                        id: authData.user.id,
+                        username: username,
+                        email: email,
+                        role: role
+                    }
+                ])
+                .select()
+                .single();
+
+            if (insertError) {
+                console.error('User insert error:', insertError);
+                return { success: false, message: 'Failed to create user profile' };
+            }
+
+            return { success: true, user: newUser };
+        } catch (error) {
+            console.error('Add user error:', error);
+            return { success: false, message: 'Failed to add user' };
+        }
     }
 
-    getAllUsers() {
-        return this.users.map(user => ({
-            id: user.id,
-            username: user.username,
-            role: user.role
-        }));
+    async updateUser(id, updates) {
+        try {
+            const { data: existingUser } = await this.supabase
+                .from('users')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!existingUser) {
+                return { success: false, message: 'User not found' };
+            }
+
+            if (updates.username && updates.username !== existingUser.username) {
+                const { data: duplicateCheck } = await this.supabase
+                    .from('users')
+                    .select('username')
+                    .eq('username', updates.username)
+                    .neq('id', id);
+
+                if (duplicateCheck && duplicateCheck.length > 0) {
+                    return { success: false, message: 'Username already exists' };
+                }
+            }
+
+            const { data: updatedUser, error } = await this.supabase
+                .from('users')
+                .update(updates)
+                .eq('id', id)
+                .select()
+                .single();
+
+            if (error) {
+                console.error('Update user error:', error);
+                return { success: false, message: 'Failed to update user' };
+            }
+
+            if (updates.password) {
+                await this.supabase.auth.admin.updateUserById(id, {
+                    password: updates.password
+                });
+            }
+
+            return { success: true, user: updatedUser };
+        } catch (error) {
+            console.error('Update user error:', error);
+            return { success: false, message: 'Failed to update user' };
+        }
+    }
+
+    async deleteUser(id) {
+        try {
+            const { data: user } = await this.supabase
+                .from('users')
+                .select('*')
+                .eq('id', id)
+                .maybeSingle();
+
+            if (!user) {
+                return { success: false, message: 'User not found' };
+            }
+
+            if (user.role === 'developer') {
+                const { data: developers } = await this.supabase
+                    .from('users')
+                    .select('id')
+                    .eq('role', 'developer');
+
+                if (developers && developers.length <= 1) {
+                    return { success: false, message: 'Cannot delete the last developer account' };
+                }
+            }
+
+            const { error } = await this.supabase
+                .from('users')
+                .delete()
+                .eq('id', id);
+
+            if (error) {
+                console.error('Delete user error:', error);
+                return { success: false, message: 'Failed to delete user' };
+            }
+
+            return { success: true };
+        } catch (error) {
+            console.error('Delete user error:', error);
+            return { success: false, message: 'Failed to delete user' };
+        }
+    }
+
+    async getAllUsers() {
+        try {
+            const { data: users, error } = await this.supabase
+                .from('users')
+                .select('id, username, role')
+                .order('username');
+
+            if (error) {
+                console.error('Get all users error:', error);
+                return [];
+            }
+
+            return users || [];
+        } catch (error) {
+            console.error('Get all users error:', error);
+            return [];
+        }
     }
 }
 
-// Global auth manager instance
 window.authManager = new AuthManager();

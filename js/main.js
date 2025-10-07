@@ -6,19 +6,16 @@ class App {
     }
 
     async init() {
-        // Initialize theme
         this.initializeTheme();
-        
-        // Check for existing user session
-        this.checkUserSession();
-        
-        // Initialize login form
+
+        await window.authManager.init();
+
+        await this.checkUserSession();
+
         this.initializeLoginForm();
-        
-        // Initialize theme toggle
+
         this.initializeThemeToggle();
-        
-        // Initialize logout
+
         this.initializeLogout();
     }
 
@@ -55,7 +52,7 @@ class App {
         }
     }
 
-    checkUserSession() {
+    async checkUserSession() {
         const currentUser = window.authManager?.getCurrentUser();
         console.log('Checking user session:', currentUser);
         if (currentUser) {
@@ -76,7 +73,7 @@ class App {
         }
     }
 
-    handleLogin() {
+    async handleLogin() {
         const username = document.getElementById('username')?.value.trim();
         const password = document.getElementById('password')?.value.trim();
 
@@ -85,15 +82,14 @@ class App {
             return;
         }
 
-        const result = window.authManager.login(username, password);
-        
+        const result = await window.authManager.login(username, password);
+
         if (result.success) {
             this.currentUser = result.user;
             console.log('Login successful:', result.user);
             Utils.showToast(`Welcome back, ${result.user.username}!`, 'success');
             this.showMainApp();
-            
-            // Clear form
+
             document.getElementById('loginForm').reset();
         } else {
             Utils.showToast(result.message || 'Invalid username or password', 'error');
@@ -154,14 +150,13 @@ class App {
     }
 
     logout() {
-        Utils.confirm('Are you sure you want to logout?', () => {
-            window.authManager.logout();
+        Utils.confirm('Are you sure you want to logout?', async () => {
+            await window.authManager.logout();
             this.currentUser = null;
             this.showLoginModal();
-            
-            // Reset navigation to dashboard
+
             window.navigationManager.navigateTo('dashboard');
-            
+
             Utils.showToast('Logged out successfully', 'success');
         });
     }

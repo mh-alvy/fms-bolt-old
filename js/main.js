@@ -2,21 +2,74 @@
 class App {
     constructor() {
         this.currentUser = null;
+        this.initialized = false;
         this.init().catch(console.error);
     }
 
     async init() {
-        this.initializeTheme();
+        try {
+            console.log('Initializing application...');
 
-        await window.authManager.init();
+            this.initializeTheme();
 
-        await this.checkUserSession();
+            // Wait for Supabase to be available
+            await this.waitForSupabase();
+            console.log('Supabase client ready');
 
-        this.initializeLoginForm();
+            // Initialize auth manager
+            await window.authManager.init();
+            console.log('Auth manager initialized');
 
-        this.initializeThemeToggle();
+            // Check user session
+            await this.checkUserSession();
 
-        this.initializeLogout();
+            // Setup UI handlers
+            this.initializeLoginForm();
+            this.initializeThemeToggle();
+            this.initializeLogout();
+
+            this.initialized = true;
+            console.log('Application initialized successfully');
+        } catch (error) {
+            console.error('Failed to initialize application:', error);
+            this.showInitializationError(error);
+        }
+    }
+
+    async waitForSupabase() {
+        let attempts = 0;
+        const maxAttempts = 100;
+
+        while (!window.supabase && attempts < maxAttempts) {
+            await new Promise(resolve => setTimeout(resolve, 50));
+            attempts++;
+        }
+
+        if (!window.supabase) {
+            throw new Error('Failed to initialize Supabase client. Please refresh the page.');
+        }
+    }
+
+    showInitializationError(error) {
+        const loginModal = document.getElementById('loginModal');
+        if (loginModal) {
+            const modalContent = loginModal.querySelector('.modal-content');
+            if (modalContent) {
+                modalContent.innerHTML = `
+                    <div class="login-header">
+                        <h2>Initialization Error</h2>
+                    </div>
+                    <div style="padding: 20px; text-align: center;">
+                        <p style="color: var(--danger-color); margin-bottom: 20px;">
+                            Failed to initialize the application. Please check your internet connection and try again.
+                        </p>
+                        <button onclick="location.reload()" class="btn btn-primary">
+                            Reload Page
+                        </button>
+                    </div>
+                `;
+            }
+        }
     }
 
     initializeTheme() {

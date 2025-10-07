@@ -1,22 +1,28 @@
 // Dashboard Management
 class DashboardManager {
     constructor() {
+        this.initialized = false;
         this.init();
     }
 
     init() {
-        this.refresh();
+        if (this.initialized) return;
+        this.initialized = true;
     }
 
-    refresh() {
-        this.updateStats();
-        this.loadRecentActivities();
+    async refresh() {
+        if (!window.storageManager?.supabase) {
+            console.warn('DashboardManager: Supabase not ready, skipping refresh');
+            return;
+        }
+        await this.updateStats();
+        await this.loadRecentActivities();
     }
 
-    updateStats() {
-        const students = window.storageManager.getStudents();
-        const batches = window.storageManager.getBatches();
-        const payments = window.storageManager.getPayments();
+    async updateStats() {
+        const students = await window.storageManager.getStudents();
+        const batches = await window.storageManager.getBatches();
+        const payments = await window.storageManager.getPayments();
 
         // Total students
         document.getElementById('totalStudents').textContent = students.length;

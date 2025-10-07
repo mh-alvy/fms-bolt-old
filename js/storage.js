@@ -494,6 +494,11 @@ class StorageManager {
 
     async getBatches() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getBatches');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('batches')
                 .select('*')
@@ -509,6 +514,11 @@ class StorageManager {
 
     async getCourses() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getCourses');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('courses')
                 .select('*')
@@ -539,6 +549,11 @@ class StorageManager {
 
     async getInstitutions() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getInstitutions');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('institutions')
                 .select('*')
@@ -554,6 +569,11 @@ class StorageManager {
 
     async getStudents() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getStudents');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('students')
                 .select('*')
@@ -569,6 +589,11 @@ class StorageManager {
 
     async getPayments() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getPayments');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('payments')
                 .select('*')
@@ -807,6 +832,11 @@ class StorageManager {
 
     async getReferenceOptions() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getReferenceOptions');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('reference_options')
                 .select('*')
@@ -853,6 +883,11 @@ class StorageManager {
 
     async getReceiverOptions() {
         try {
+            if (!this.supabase) {
+                console.warn('Supabase client not initialized in getReceiverOptions');
+                return [];
+            }
+
             const { data, error } = await this.supabase
                 .from('receiver_options')
                 .select('*')

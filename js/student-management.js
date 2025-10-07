@@ -9,7 +9,15 @@ class StudentManagementManager {
         if (this.isInitialized) return;
         this.isInitialized = true;
         this.bindEvents();
-        this.refresh();
+    }
+
+    refresh() {
+        if (!window.storageManager?.supabase) {
+            console.warn('StudentManagementManager: Supabase not ready, skipping refresh');
+            return;
+        }
+        this.loadInstitutions();
+        this.loadBatchesForStudentForm();
     }
 
     bindEvents() {
@@ -125,13 +133,7 @@ class StudentManagementManager {
         }
     }
 
-    refresh() {
-        this.loadInstitutions();
-        this.updateInstitutionDropdown();
-        this.updateBatchDropdown();
-    }
-
-    loadInstitutions() {
+    async loadInstitutions() {
         const institutionList = document.getElementById('institutionList');
         if (!institutionList) return;
 

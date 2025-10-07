@@ -1,12 +1,24 @@
 // Batch Management
 class BatchManager {
     constructor() {
+        this.initialized = false;
         this.init();
     }
 
     init() {
+        if (this.initialized) return;
+        this.initialized = true;
         this.bindEvents();
-        this.refresh();
+    }
+
+    refresh() {
+        if (!window.storageManager?.supabase) {
+            console.warn('BatchManager: Supabase not ready, skipping refresh');
+            return;
+        }
+        this.loadBatches();
+        this.loadCourses();
+        this.loadMonths();
     }
 
     bindEvents() {
@@ -193,16 +205,11 @@ class BatchManager {
         this.refresh();
     }
 
-    refresh() {
-        this.loadBatches();
-        this.loadCourses();
-        this.loadMonths();
-        this.updateDropdowns();
-    }
-
-    loadBatches() {
+    async loadBatches() {
         const batchList = document.getElementById('batchList');
-        const batches = window.storageManager.getBatches();
+        if (!batchList) return;
+
+        const batches = await window.storageManager.getBatches();
 
         batchList.innerHTML = batches.map(batch => `
             <div class="entity-item">
@@ -218,9 +225,11 @@ class BatchManager {
         `).join('');
     }
 
-    loadCourses() {
+    async loadCourses() {
         const courseList = document.getElementById('courseList');
-        const courses = window.storageManager.getCourses();
+        if (!courseList) return;
+
+        const courses = await window.storageManager.getCourses();
 
         courseList.innerHTML = courses.map(course => {
             const batch = window.storageManager.getBatchById(course.batchId);
@@ -239,9 +248,11 @@ class BatchManager {
         }).join('');
     }
 
-    loadMonths() {
+    async loadMonths() {
         const monthList = document.getElementById('monthList');
-        const months = window.storageManager.getMonths();
+        if (!monthList) return;
+
+        const months = await window.storageManager.getMonths();
 
         monthList.innerHTML = months.map(month => {
             const course = window.storageManager.getCourseById(month.courseId);

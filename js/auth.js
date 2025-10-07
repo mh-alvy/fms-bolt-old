@@ -75,15 +75,14 @@ class AuthManager {
     isAccountLocked(username) {
         const attempts = this.loginAttempts[username];
         if (!attempts) return false;
-        
+
         const now = Date.now();
-        const lockoutTime = 15 * 60 * 1000; // 15 minutes
-        
+        const lockoutTime = 15 * 60 * 1000;
+
         if (attempts.count >= this.maxLoginAttempts) {
             if (now - attempts.lastAttempt < lockoutTime) {
                 return true;
             }
-            // Reset attempts after lockout period
             delete this.loginAttempts[username];
             this.saveLoginAttempts();
         }
@@ -92,10 +91,8 @@ class AuthManager {
 
     recordLoginAttempt(username, success) {
         if (success) {
-            // Clear failed attempts on successful login
             delete this.loginAttempts[username];
         } else {
-            // Record failed attempt
             if (!this.loginAttempts[username]) {
                 this.loginAttempts[username] = { count: 0, lastAttempt: 0 };
             }
@@ -109,7 +106,6 @@ class AuthManager {
         try {
             console.log('=== LOGIN ATTEMPT ===');
             console.log('Username:', username);
-            console.log('Supabase client available:', !!this.supabase);
 
             if (this.isAccountLocked(username)) {
                 console.log('Account is locked');
@@ -127,17 +123,10 @@ class AuthManager {
                 .maybeSingle();
 
             if (userError) {
-                console.error('Database error during login:');
-                console.error('Error message:', userError.message);
-                console.error('Error details:', userError.details);
-                console.error('Error hint:', userError.hint);
-                console.error('Error code:', userError.code);
-                console.error('Full error:', JSON.stringify(userError, null, 2));
+                console.error('Database error during login:', userError);
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Login failed. Please try again.' };
             }
-
-            console.log('User query result:', users ? 'User found' : 'User not found');
 
             if (!users) {
                 console.log('No user found with username:', username);
@@ -146,8 +135,6 @@ class AuthManager {
             }
 
             console.log('User found, verifying password...');
-            console.log('Password hash length:', users.password_hash?.length);
-
             const { data: verificationResult, error: verifyError } = await this.supabase
                 .rpc('verify_password', {
                     password: password,
@@ -155,20 +142,13 @@ class AuthManager {
                 });
 
             if (verifyError) {
-                console.error('Password verification error:');
-                console.error('Error message:', verifyError.message);
-                console.error('Error details:', verifyError.details);
-                console.error('Error hint:', verifyError.hint);
-                console.error('Error code:', verifyError.code);
-                console.error('Full error:', JSON.stringify(verifyError, null, 2));
+                console.error('Password verification error:', verifyError);
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Login failed. Please try again.' };
             }
 
-            console.log('Password verification result:', verificationResult);
-
             if (!verificationResult) {
-                console.log('Password verification failed - incorrect password');
+                console.log('Password verification failed');
                 this.recordLoginAttempt(username, false);
                 return { success: false, message: 'Invalid credentials' };
             }
@@ -193,45 +173,14 @@ class AuthManager {
             return { success: true, user: userWithoutHash };
         } catch (error) {
             console.error('=== LOGIN EXCEPTION ===');
-            console.error('Error type:', error.constructor.name);
-            console.error('Error message:', error.message);
-            console.error('Error stack:', error.stack);
-            console.error('Full error:', error);
+            console.error('Error:', error);
             this.recordLoginAttempt(username, false);
             return { success: false, message: 'Login failed. Please try again.' };
         }
     }
 
     async initializeDemoUsers() {
-        try {
-            const demoUsers = [
-                { username: 'admin', email: 'admin@breakthefear.local', role: 'admin' },
-                { username: 'manager', email: 'manager@breakthefear.local', role: 'manager' },
-                { username: 'developer', email: 'developer@breakthefear.local', role: 'developer' }
-            ];
-
-            for (const demoUser of demoUsers) {
-                const { data: existing } = await this.supabase
-                    .from('users')
-                    .select('id')
-                    .eq('username', demoUser.username)
-                    .maybeSingle();
-
-                if (!existing) {
-                    const userId = crypto.randomUUID();
-                    await this.supabase
-                        .from('users')
-                        .insert([{
-                            id: userId,
-                            username: demoUser.username,
-                            email: demoUser.email,
-                            role: demoUser.role
-                        }]);
-                }
-            }
-        } catch (error) {
-            console.error('Error initializing demo users:', error);
-        }
+        console.log('Demo users are pre-configured in the database');
     }
 
     async logout() {
@@ -277,14 +226,12 @@ class AuthManager {
 
             const { data: newUser, error: insertError } = await this.supabase
                 .from('users')
-                .insert([
-                    {
-                        username: username,
-                        email: email,
-                        role: role,
-                        password_hash: hashedPassword
-                    }
-                ])
+                .insert([{
+                    username: username,
+                    email: email,
+                    role: role,
+                    password_hash: hashedPassword
+                }])
                 .select('id, username, email, role')
                 .single();
 

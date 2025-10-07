@@ -9,23 +9,8 @@ class AuthManager {
     async init() {
         if (this.initialized) return;
 
-        await this.waitForSupabase();
         this.initialized = true;
         await this.checkSession();
-    }
-
-    async waitForSupabase() {
-        let attempts = 0;
-        while (!window.supabase && attempts < 50) {
-            await new Promise(resolve => setTimeout(resolve, 100));
-            attempts++;
-        }
-
-        if (!window.supabase) {
-            throw new Error('Supabase client not initialized');
-        }
-
-        console.log('Supabase client initialized successfully');
     }
 
     async checkSession() {
@@ -38,14 +23,21 @@ class AuthManager {
                 const maxSessionAge = 24 * 60 * 60 * 1000;
 
                 if (sessionAge < maxSessionAge && parsed.user) {
-                    const { data, error } = await window.supabase
-                        .from('users')
-                        .select('id, username, email, role')
-                        .eq('id', parsed.user.id)
-                        .maybeSingle();
+                    const supabaseUrl = 'https://0ec90b57d6e95fcbda19832f.supabase.co';
+                    const verifyUrl = `${supabaseUrl}/functions/v1/auth/verify-session`;
 
-                    if (data && !error) {
-                        this.currentUser = data;
+                    const response = await fetch(verifyUrl, {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({ userId: parsed.user.id })
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok && result.success) {
+                        this.currentUser = result.user;
                     } else {
                         localStorage.removeItem('btf_user_session');
                     }
@@ -114,26 +106,27 @@ class AuthManager {
                 };
             }
 
-            console.log('Authenticating with Supabase...');
-            const { data, error } = await window.supabase
-                .rpc('authenticate_user', {
-                    p_username: username,
-                    p_password: password
-                });
+            console.log('Authenticating via edge function...');
+            const supabaseUrl = 'https://0ec90b57d6e95fcbda19832f.supabase.co';
+            const authUrl = `${supabaseUrl}/functions/v1/auth/login`;
 
-            if (error) {
-                console.error('Authentication error:', error);
+            const response = await fetch(authUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ username, password })
+            });
+
+            const result = await response.json();
+
+            if (!response.ok || !result.success) {
+                console.log('Authentication failed:', result.message);
                 this.recordLoginAttempt(username, false);
-                return { success: false, message: 'Login failed. Please try again.' };
+                return { success: false, message: result.message || 'Invalid credentials' };
             }
 
-            if (!data || data.length === 0 || !data[0].authenticated) {
-                console.log('Invalid credentials');
-                this.recordLoginAttempt(username, false);
-                return { success: false, message: 'Invalid credentials' };
-            }
-
-            const user = data[0];
+            const user = result.user;
             console.log('Login successful!');
             this.recordLoginAttempt(username, true);
 
@@ -154,7 +147,7 @@ class AuthManager {
             console.error('=== LOGIN EXCEPTION ===');
             console.error('Error:', error);
             this.recordLoginAttempt(username, false);
-            return { success: false, message: 'Login failed. Please try again.' };
+            return { success: false, message: 'Login failed. Please check your connection and try again.' };
         }
     }
 
